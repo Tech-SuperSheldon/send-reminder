@@ -26,9 +26,6 @@ app.use(
   })
 );
 
-console.log("SAGEPILOT_BASE_URL =", process.env.SAGEPILOT_BASE_URL);
-console.log("SAGEPILOT_CHANNEL_ID =", process.env.SAGEPILOT_CHANNEL_ID);
-console.log("SAGEPILOT_TOKEN exists =", !!process.env.SAGEPILOT_TOKEN);
 
 
 /* -------------------- Manual triggers -------------------- */
