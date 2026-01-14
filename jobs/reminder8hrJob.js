@@ -80,7 +80,7 @@ async function runNowOnce8hr() {
       await sendSagePilotTemplate({
         phone,
         customerName: studentName,
-        templateName: "course_class_8hr_massage",
+        templateName: "course_class_8hr_massage1",
         bodyTexts: [
           studentName,
           subject,
