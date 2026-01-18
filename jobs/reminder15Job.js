@@ -71,7 +71,7 @@ async function handleSession15(session) {
         await sendSagePilotTemplate({
           phone: teacherPhone,
           customerName: teacherName,
-          templateName: "before_course_class_15_mins_teachers",
+          templateName: "teacher_course_class_15min",
           bodyTexts: [teacherName, studentName, subject]
 
         });
