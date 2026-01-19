@@ -96,11 +96,17 @@ async function handleSession15(session) {
 
 /* ------------------ RUN ONCE ------------------ */
 async function runNowOnce15() {
-  const rounded = roundToNearestHalfHour(new Date());
-  const targetISO = rounded.toISOString();
+  const now = new Date();
+
+  // find sessions starting in the NEXT 15 minutes (±1 min buffer)
+  const from = new Date(now.getTime() + 14 * 60 * 1000);
+  const to = new Date(now.getTime() + 16 * 60 * 1000);
 
   const sessions = await Session.find({
-    scheduledStartTime: targetISO,
+    scheduledStartTime: {
+      $gte: from.toISOString(),
+      $lte: to.toISOString(),
+    },
   }).lean();
 
   let reminders = 0;
