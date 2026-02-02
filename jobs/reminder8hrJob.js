@@ -5,7 +5,22 @@ const Teacher = require("../models/teacher");
 const Session8hrLog = require("../models/session8hrLog");
 const { sendSagePilotTemplate } = require("../services/sagepilot");
 
-/* ------------------ TIME HELPERS ------------------ */
+const COUNTRY_TZ_MAPPING = {
+  "91": "Asia/Kolkata",
+  "61": "Australia/Sydney",
+  "1": "America/New_York",
+  "44": "Europe/London",
+  "971": "Asia/Dubai",
+  "65": "Asia/Singapore"
+};
+
+function getStudentTimeZone(phone) {
+  for (const [code, tz] of Object.entries(COUNTRY_TZ_MAPPING)) {
+    if (phone.startsWith(code)) return tz;
+  }
+  return "Australia/Sydney"; 
+}
+
 function roundToNearestHalfHour(date = new Date()) {
   const m = date.getMinutes();
   if (m < 15) date.setMinutes(0, 0, 0);
@@ -14,7 +29,6 @@ function roundToNearestHalfHour(date = new Date()) {
   return date;
 }
 
-/* ------------------ MAIN RUNNER ------------------ */
 async function runNowOnce8hr() {
   const base = roundToNearestHalfHour(new Date());
   base.setHours(base.getHours() + 8);
@@ -55,28 +69,24 @@ async function runNowOnce8hr() {
 
       if (!phone) continue;
 
+      const studentTimeZone = getStudentTimeZone(phone);
+
       const minus4 = new Date(startTime);
       minus4.setHours(minus4.getHours() - 4);
 
-      const classTimeReadable = startTime.toLocaleString("en-AU", {
+      const formatOptions = {
+        timeZone: studentTimeZone,
         year: "numeric",
         month: "short",
         day: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
         hour12: true,
-      });
+      };
 
-      const minus4TimeReadable = minus4.toLocaleString("en-AU", {
-        year: "numeric",
-        month: "short",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-      });
+      const classTimeReadable = startTime.toLocaleString("en-AU", formatOptions);
+      const minus4TimeReadable = minus4.toLocaleString("en-AU", formatOptions);
 
-      // 🔹 SEND SAGEPILOT (8HR STUDENT)
       await sendSagePilotTemplate({
         phone,
         customerName: studentName,
@@ -90,7 +100,6 @@ async function runNowOnce8hr() {
         ],
       });
 
-      // 🔹 SAVE LOG
       await Session8hrLog.create({
         sessionId: session._id,
         studentName,
@@ -106,7 +115,6 @@ async function runNowOnce8hr() {
   return { sessions: sessions.length };
 }
 
-/* ------------------ SCHEDULER ------------------ */
 function startScheduler() {
   schedule.scheduleJob("0,30 * * * *", async () => {
     console.log("[Scheduler-8hr] Triggered at", new Date().toISOString());
