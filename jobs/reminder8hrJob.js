@@ -1,3 +1,4 @@
+const axios = require("axios"); 
 const schedule = require("node-schedule");
 const Session = require("../models/session");
 const User = require("../models/user");
@@ -5,6 +6,34 @@ const Teacher = require("../models/teacher");
 const Session8hrLog = require("../models/session8hrLog");
 const { sendSagePilotTemplate } = require("../services/sagepilot");
 
+/* ------------------ API HEADERS ------------------ */
+const WISE_HEADERS = {
+  Authorization: "Basic NjgwMTA1OWZjZGQyMTFlYzE1YTE2YTJkOjE5NjcwYmUwN2M5NTA2MDRjZmY4OTFlZDAyZWYyMzc5",
+  "Content-Type": "application/json",
+  "x-api-key": "19670be07c950604cff891ed02ef2379",
+  "x-wise-namespace": "supersheldon",
+  "user-agent": "VendorIntegrations/supersheldon",
+};
+
+/* ------------------ FETCH STUDENT CREDITS ------------------ */
+async function fetchStudentCredits(classId, studentId) {
+  try {
+    const url = `https://api.wiseapp.live/institutes/6801059f6a1ee607782c56ff/classes/${classId}/students/${studentId}/sessionCredits?fetchHistory=true`;
+    const response = await axios.get(url, { headers: WISE_HEADERS });
+    const available = response.data?.data?.credits?.available;
+    console.log(`[Scheduler-8hr]    💳 Credits for student ${studentId}: available = ${available}`);
+    return available;
+  } catch (err) {
+    console.error(`[Scheduler-8hr]    ❌ Failed to fetch credits`);
+    console.error(`[Scheduler-8hr]       Class ID   : ${classId}`);
+    console.error(`[Scheduler-8hr]       Student ID : ${studentId}`);
+    console.error(`[Scheduler-8hr]       Status     : ${err.response?.status}`);
+    console.error(`[Scheduler-8hr]       Response   : ${JSON.stringify(err.response?.data)}`);
+    return null; // if API fails, allow reminder to go through
+  }
+}
+
+/* ------------------ TIMEZONE MAPPING ------------------ */
 const COUNTRY_TZ_MAPPING = {
   "91": "Asia/Kolkata",
   "61": "Australia/Sydney",
@@ -18,7 +47,7 @@ function getStudentTimeZone(phone) {
   for (const [code, tz] of Object.entries(COUNTRY_TZ_MAPPING)) {
     if (phone.startsWith(code)) return tz;
   }
-  return "Australia/Sydney"; 
+  return "Australia/Sydney";
 }
 
 function roundToNearestHalfHour(date = new Date()) {
@@ -29,10 +58,10 @@ function roundToNearestHalfHour(date = new Date()) {
   return date;
 }
 
+/* ------------------ MAIN RUNNER ------------------ */
 async function runNowOnce8hr() {
   const base = roundToNearestHalfHour(new Date());
   base.setHours(base.getHours() + 8);
-
   const windowStart = new Date(base);
   const windowEnd = new Date(base);
   windowEnd.setMinutes(windowEnd.getMinutes() + 29, 59, 999);
@@ -42,6 +71,7 @@ async function runNowOnce8hr() {
       $gte: windowStart.toISOString(),
       $lte: windowEnd.toISOString(),
     },
+    meetingStatus: { $ne: "CANCELLED" }, // ✅ Already existed
   }).lean();
 
   for (const session of sessions) {
@@ -51,7 +81,6 @@ async function runNowOnce8hr() {
     const teacherDoc = await Teacher.findOne({
       "userId._id": session.userId?._id,
     }).lean();
-
     const teacherName = teacherDoc?.userId?.name || "";
 
     const students = await User.find({
@@ -66,11 +95,18 @@ async function runNowOnce8hr() {
       const studentName = stu.userId?.name || "";
       const studentEmail = stu.userId?.email || "";
       const phone = String(stu.userId?.phoneNumber || "").replace(/\D/g, "");
+      const studentId = stu.userId?._id || stu._id; // ✅ Added
 
       if (!phone) continue;
 
-      const studentTimeZone = getStudentTimeZone(phone);
+      // ✅ Check available credits before sending reminder
+      const availableCredits = await fetchStudentCredits(session.classId, studentId);
+      if (availableCredits !== null && availableCredits <= 0) {
+        console.log(`[Scheduler-8hr]    ⛔ Skipping student ${studentName} — 0 available credits.`);
+        continue;
+      }
 
+      const studentTimeZone = getStudentTimeZone(phone);
       const minus4 = new Date(startTime);
       minus4.setHours(minus4.getHours() - 4);
 
@@ -115,12 +151,12 @@ async function runNowOnce8hr() {
   return { sessions: sessions.length };
 }
 
+/* ------------------ SCHEDULER ------------------ */
 function startScheduler() {
   schedule.scheduleJob("0,30 * * * *", async () => {
     console.log("[Scheduler-8hr] Triggered at", new Date().toISOString());
     await runNowOnce8hr();
   });
-
   console.log("[Scheduler-8hr] Started");
 }
 
