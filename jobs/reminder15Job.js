@@ -9,11 +9,11 @@ const { sendSagePilotTemplate } = require("../services/sagepilot");
 
 /* ------------------ API HEADERS ------------------ */
 const WISE_HEADERS = {
-  Authorization: "Basic NjgwMTA1OWZjZGQyMTFlYzE1YTE2YTJkOjE5NjcwYmUwN2M5NTA2MDRjZmY4OTFlZDAyZWYyMzc5",
+  Authorization: process.env.WISE_AUTHORIZATION,
   "Content-Type": "application/json",
-  "x-api-key": "19670be07c950604cff891ed02ef2379",
-  "x-wise-namespace": "supersheldon",
-  "user-agent": "VendorIntegrations/supersheldon",
+  "x-api-key": process.env.WISE_API_KEY,
+  "x-wise-namespace": process.env.WISE_NAMESPACE,
+  "user-agent": `VendorIntegrations/${process.env.WISE_NAMESPACE}`,
 };
 
 /* ------------------ FETCH SESSION FROM API ------------------ */
@@ -48,18 +48,27 @@ async function fetchStudentCredits(classId, studentId) {
     console.error(`[Scheduler]       Student ID : ${studentId}`);
     console.error(`[Scheduler]       Status     : ${err.response?.status}`);
     console.error(`[Scheduler]       Response   : ${JSON.stringify(err.response?.data)}`);
-    return null; // if API fails, allow reminder to go through
+    return null;
   }
 }
 
 /* ------------------ MAIN HANDLER ------------------ */
 async function handleSession15(session) {
   const subject = session.classSubject || "Class";
-  const sessionStart = new Date(session.scheduledStartTime);
 
   console.log(`[Scheduler] 🔹 Processing Session: ${session._id} | Subject: ${subject}`);
 
-  // 1. Fetch Students — OLD schema (classes._id) + NEW schema (classroom._id)
+  // 1. Fetch session from API first — if it fails, skip everything ✅
+  const sessionData = await fetchSessionFromAPI(session._id);
+  if (!sessionData) {
+    console.log(`[Scheduler]    ⛔ Session ${session._id} not found in Wise API — skipping all reminders.`);
+    return 0;
+  }
+
+  const wiseLink = sessionData?.join_url || sessionData?.joinUrl || "Not available";
+  const wisePlatformLink = `https://supersheldon.wise.live/`;
+
+  // 2. Fetch Students — OLD schema (classes._id) + NEW schema (classroom._id)
   const studentsOld = await User.find({
     relation: "STUDENT",
     status: "ACCEPTED",
@@ -74,7 +83,7 @@ async function handleSession15(session) {
 
   console.log(`[Scheduler]    Found ${students.length} students enrolled (old: ${studentsOld.length}, new: ${studentsNew.length}).`);
 
-  // 2. Fetch Teacher
+  // 3. Fetch Teacher
   const teacherDoc = await Teacher.findOne({
     "userId._id": session.userId?._id,
   }).lean();
@@ -86,11 +95,6 @@ async function handleSession15(session) {
 
   const teacherName = teacherDoc.userId?.name || "Teacher";
   const teacherPhone = String(teacherDoc.userId?.phoneNumber || "").replace(/\D/g, "");
-
-  // 3. Fetch session from API to get join_url
-  const sessionData = await fetchSessionFromAPI(session._id);
-  const wiseLink = sessionData?.join_url || sessionData?.joinUrl || "";
-  const wisePlatformLink = `https://app.wiseapp.live/session/${session._id}`;
 
   // 4. Format class time
   const classTimeReadable = new Date(session.scheduledStartTime).toLocaleString("en-AU", {
@@ -104,10 +108,9 @@ async function handleSession15(session) {
   });
 
   // ---------------------------------------------------------
-  // 🔹 TEACHER REMINDER (Send Immediately)
+  // 🔹 TEACHER REMINDER
   // ---------------------------------------------------------
   if (teacherPhone) {
-    // ✅ Handle both old and new schema for student names list
     const studentNamesList = students
       .map(s => s.userId?.name || s.student?.name)
       .filter(Boolean)
@@ -130,10 +133,9 @@ async function handleSession15(session) {
   }
 
   // ---------------------------------------------------------
-  // 🔹 STUDENT REMINDERS (Send Immediately)
+  // 🔹 STUDENT REMINDERS
   // ---------------------------------------------------------
   for (const stu of students) {
-    // ✅ Handle both old schema (userId) and new schema (student)
     const studentName  = stu.userId?.name  || stu.student?.name  || "Student";
     const studentPhone = String(stu.userId?.phoneNumber || stu.student?.phoneNumber || "").replace(/\D/g, "");
     const studentEmail = stu.userId?.email || stu.student?.email || "";
@@ -144,7 +146,7 @@ async function handleSession15(session) {
       continue;
     }
 
-    // ✅ Check available credits before sending reminder
+    // Check available credits
     const availableCredits = await fetchStudentCredits(session.classId, studentId);
     if (availableCredits !== null && availableCredits <= 0) {
       console.log(`[Scheduler]    ⛔ Skipping student ${studentName} — 0 available credits.`);
@@ -156,18 +158,17 @@ async function handleSession15(session) {
       await sendSagePilotTemplate({
         phone: studentPhone,
         customerName: studentName,
-        templateName: "before_course_class_15min_student",
+        templateName: "before_course_class_15min_student_v1_v1_v2",
         bodyTexts: [
-          studentName,       // 1
-          subject,           // 2
-          classTimeReadable, // 3
-          wiseLink,          // 4 — Zoom join URL
-          wisePlatformLink,  // 5 — https://app.wiseapp.live/session/{id}
-          studentEmail,      // 6
+          studentName,      // 1
+          subject,          // 2
+          classTimeReadable,// 3
+          wisePlatformLink, // 4
+          studentEmail,     // 5
+          studentName,      // 6
         ],
       });
 
-      // Log to DB
       await ReminderLog.create({
         sessionId: session._id,
         studentName,

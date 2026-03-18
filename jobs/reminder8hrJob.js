@@ -1,4 +1,4 @@
-const axios = require("axios"); 
+const axios = require("axios");
 const schedule = require("node-schedule");
 const Session = require("../models/session");
 const User = require("../models/user");
@@ -8,12 +8,30 @@ const { sendSagePilotTemplate } = require("../services/sagepilot");
 
 /* ------------------ API HEADERS ------------------ */
 const WISE_HEADERS = {
-  Authorization: "Basic NjgwMTA1OWZjZGQyMTFlYzE1YTE2YTJkOjE5NjcwYmUwN2M5NTA2MDRjZmY4OTFlZDAyZWYyMzc5",
+  Authorization: process.env.WISE_AUTHORIZATION,
   "Content-Type": "application/json",
-  "x-api-key": "19670be07c950604cff891ed02ef2379",
-  "x-wise-namespace": "supersheldon",
-  "user-agent": "VendorIntegrations/supersheldon",
+  "x-api-key": process.env.WISE_API_KEY,
+  "x-wise-namespace": process.env.WISE_NAMESPACE,
+  "user-agent": `VendorIntegrations/${process.env.WISE_NAMESPACE}`,
 };
+
+/* ------------------ FETCH SESSION FROM API ------------------ */
+async function fetchSessionFromAPI(sessionId) {
+  try {
+    const response = await axios.get(
+      `https://api.wiseapp.live/user/session/${sessionId}?showLiveClassInsight=true&showFeedbackConfig=true&showFeedbackSubmission=true&showSessionFiles=true&showAgendaStructure=true`,
+      { headers: WISE_HEADERS }
+    );
+    return response.data?.data;
+  } catch (err) {
+    console.error(`[Scheduler-8hr] ❌ Failed to fetch session from API`);
+    console.error(`[Scheduler-8hr]    Session ID : ${sessionId}`);
+    console.error(`[Scheduler-8hr]    URL        : https://api.wiseapp.live/user/session/${sessionId}`);
+    console.error(`[Scheduler-8hr]    Status     : ${err.response?.status}`);
+    console.error(`[Scheduler-8hr]    Response   : ${JSON.stringify(err.response?.data)}`);
+    return null;
+  }
+}
 
 /* ------------------ FETCH STUDENT CREDITS ------------------ */
 async function fetchStudentCredits(classId, studentId) {
@@ -29,7 +47,7 @@ async function fetchStudentCredits(classId, studentId) {
     console.error(`[Scheduler-8hr]       Student ID : ${studentId}`);
     console.error(`[Scheduler-8hr]       Status     : ${err.response?.status}`);
     console.error(`[Scheduler-8hr]       Response   : ${JSON.stringify(err.response?.data)}`);
-    return null; // if API fails, allow reminder to go through
+    return null;
   }
 }
 
@@ -71,12 +89,23 @@ async function runNowOnce8hr() {
       $gte: windowStart.toISOString(),
       $lte: windowEnd.toISOString(),
     },
-    meetingStatus: { $ne: "CANCELLED" }, // ✅ Already existed
+    meetingStatus: { $ne: "CANCELLED" },
   }).lean();
+
+  console.log(`[Scheduler-8hr] 🎯 Found ${sessions.length} sessions in window.`);
 
   for (const session of sessions) {
     const subject = session.classSubject || "";
     const startTime = new Date(session.scheduledStartTime);
+
+    console.log(`[Scheduler-8hr] 🔹 Processing Session: ${session._id} | Subject: ${subject}`);
+
+    // ✅ Check session exists in Wise API first — if not, skip all reminders
+    const sessionData = await fetchSessionFromAPI(session._id);
+    if (!sessionData) {
+      console.log(`[Scheduler-8hr]    ⛔ Session ${session._id} not found in Wise API — skipping all reminders.`);
+      continue; // skip to next session
+    }
 
     const teacherDoc = await Teacher.findOne({
       "userId._id": session.userId?._id,
@@ -95,11 +124,11 @@ async function runNowOnce8hr() {
       const studentName = stu.userId?.name || "";
       const studentEmail = stu.userId?.email || "";
       const phone = String(stu.userId?.phoneNumber || "").replace(/\D/g, "");
-      const studentId = stu.userId?._id || stu._id; // ✅ Added
+      const studentId = stu.userId?._id || stu._id;
 
       if (!phone) continue;
 
-      // ✅ Check available credits before sending reminder
+      // Check available credits
       const availableCredits = await fetchStudentCredits(session.classId, studentId);
       if (availableCredits !== null && availableCredits <= 0) {
         console.log(`[Scheduler-8hr]    ⛔ Skipping student ${studentName} — 0 available credits.`);
@@ -145,6 +174,8 @@ async function runNowOnce8hr() {
         classTime: session.scheduledStartTime,
         status: "SENT",
       });
+
+      console.log(`[Scheduler-8hr]    ✅ Student SMS Sent & Logged for ${studentName}.`);
     }
   }
 
